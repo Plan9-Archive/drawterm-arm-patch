@@ -1,0 +1,546 @@
+Changes to support ARM architecture
+
+diff -r 9c9f289188ff Make.unix
+--- a/Make.unix	Sun Jan 02 18:33:44 2011 -0500
++++ b/Make.unix	Tue Feb 22 18:06:58 2011 +0000
+@@ -19,5 +19,5 @@
+ all: default
+ 
+ libmachdep.a:
+-	arch=`uname -m|sed 's/i.86/386/;s/Power Macintosh/power/; s/x86_64/amd64/'`; \
++	arch=`uname -m|sed 's/i.86/386/;s/Power Macintosh/power/;s/x86_64/amd64/;s/arm.*/arm/'`; \
+ 	(cd posix-$$arch &&  make)
+diff -r 9c9f289188ff posix-arm/Makefile
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/posix-arm/Makefile	Tue Feb 22 18:06:58 2011 +0000
+@@ -0,0 +1,25 @@
++ROOT=..
++include ../Make.config
++LIB=../libmachdep.a
++
++OFILES=\
++	getcallerpc.$O\
++	md5block.$O\
++	sha1block.$O\
++	tas.$O
++
++default: $(LIB)
++$(LIB): $(OFILES)
++	$(AR) r $(LIB) $(OFILES)
++	$(RANLIB) $(LIB)
++
++%.$O: %.c
++	$(CC) $(CFLAGS) $*.c
++
++%.$O: %.s
++	$(AS) -o $*.$O $*.s
++
++%.s: %.spp
++	cpp $*.spp >$*.s
++
++
+diff -r 9c9f289188ff posix-arm/getcallerpc.c
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/posix-arm/getcallerpc.c	Tue Feb 22 18:06:58 2011 +0000
+@@ -0,0 +1,8 @@
++#include "u.h"
++#include "libc.h"
++
++uintptr
++getcallerpc(void *a)
++{
++	return 0;
++}
+diff -r 9c9f289188ff posix-arm/md5block.c
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/posix-arm/md5block.c	Tue Feb 22 18:06:58 2011 +0000
+@@ -0,0 +1,268 @@
++#include <u.h>
++#include <libc.h>
++#include <libsec.h>
++
++/*
++ *  rfc1321 requires that I include this.  The code is new.  The constants
++ *  all come from the rfc (hence the copyright).  We trade a table for the
++ *  macros in rfc.  The total size is a lot less. -- presotto
++ *
++ *	Copyright (C) 1991-2, RSA Data Security, Inc. Created 1991. All
++ *	rights reserved.
++ *
++ *	License to copy and use this software is granted provided that it
++ *	is identified as the "RSA Data Security, Inc. MD5 Message-Digest
++ *	Algorithm" in all material mentioning or referencing this software
++ *	or this function.
++ *
++ *	License is also granted to make and use derivative works provided
++ *	that such works are identified as "derived from the RSA Data
++ *	Security, Inc. MD5 Message-Digest Algorithm" in all material
++ *	mentioning or referencing the derived work.
++ *
++ *	RSA Data Security, Inc. makes no representations concerning either
++ *	the merchantability of this software or the suitability of this
++ *	software forany particular purpose. It is provided "as is"
++ *	without express or implied warranty of any kind.
++ *	These notices must be retained in any copies of any part of this
++ *	documentation and/or software.
++ */
++
++/*
++ *	Rotate ammounts used in the algorithm
++ */
++enum
++{
++	S11=	7,
++	S12=	12,
++	S13=	17,
++	S14=	22,
++
++	S21=	5,
++	S22=	9,
++	S23=	14,
++	S24=	20,
++
++	S31=	4,
++	S32=	11,
++	S33=	16,
++	S34=	23,
++
++	S41=	6,
++	S42=	10,
++	S43=	15,
++	S44=	21,
++};
++
++static u32int md5tab[] =
++{
++	/* round 1 */
++/*[0]*/	0xd76aa478,	
++	0xe8c7b756,	
++	0x242070db,	
++	0xc1bdceee,	
++	0xf57c0faf,	
++	0x4787c62a,	
++	0xa8304613,	
++	0xfd469501,	
++	0x698098d8,	
++	0x8b44f7af,	
++	0xffff5bb1,	
++	0x895cd7be,	
++	0x6b901122,	
++	0xfd987193,	
++	0xa679438e,	
++	0x49b40821,
++
++	/* round 2 */
++/*[16]*/0xf61e2562,	
++	0xc040b340,	
++	0x265e5a51,	
++	0xe9b6c7aa,	
++	0xd62f105d,	
++	 0x2441453,	
++	0xd8a1e681,	
++	0xe7d3fbc8,	
++	0x21e1cde6,	
++	0xc33707d6,	
++	0xf4d50d87,	
++	0x455a14ed,	
++	0xa9e3e905,	
++	0xfcefa3f8,	
++	0x676f02d9,	
++	0x8d2a4c8a,
++
++	/* round 3 */
++/*[32]*/0xfffa3942,	
++	0x8771f681,	
++	0x6d9d6122,	
++	0xfde5380c,	
++	0xa4beea44,	
++	0x4bdecfa9,	
++	0xf6bb4b60,	
++	0xbebfbc70,	
++	0x289b7ec6,	
++	0xeaa127fa,	
++	0xd4ef3085,	
++	 0x4881d05,	
++	0xd9d4d039,	
++	0xe6db99e5,	
++	0x1fa27cf8,	
++	0xc4ac5665,	
++
++	/* round 4 */
++/*[48]*/0xf4292244,	
++	0x432aff97,	
++	0xab9423a7,	
++	0xfc93a039,	
++	0x655b59c3,	
++	0x8f0ccc92,	
++	0xffeff47d,	
++	0x85845dd1,	
++	0x6fa87e4f,	
++	0xfe2ce6e0,	
++	0xa3014314,	
++	0x4e0811a1,	
++	0xf7537e82,	
++	0xbd3af235,	
++	0x2ad7d2bb,	
++	0xeb86d391,	
++};
++
++static void decode(u32int*, uchar*, ulong);
++extern void _md5block(uchar *p, ulong len, u32int *s);
++
++void
++_md5block(uchar *p, ulong len, u32int *s)
++{
++	u32int a, b, c, d, sh;
++	u32int *t;
++	uchar *end;
++	u32int x[16];
++
++	for(end = p+len; p < end; p += 64){
++		a = s[0];
++		b = s[1];
++		c = s[2];
++		d = s[3];
++
++		decode(x, p, 64);
++	
++		t = md5tab;
++		sh = 0;
++		for(; sh != 16; t += 4){
++			a += ((c ^ d) & b) ^ d;
++			a += x[sh] + t[0];
++			a = (a << S11) | (a >> (32 - S11));
++			a += b;
++
++			d += ((b ^ c) & a) ^ c;
++			d += x[sh + 1] + t[1];
++			d = (d << S12) | (d >> (32 - S12));
++			d += a;
++
++			c += ((a ^ b) & d) ^ b;
++			c += x[sh + 2] + t[2];
++			c = (c << S13) | (c >> (32 - S13));
++			c += d;
++
++			b += ((d ^ a) & c) ^ a;
++			b += x[sh + 3] + t[3];
++			b = (b << S14) | (b >> (32 - S14));
++			b += c;
++
++			sh += 4;
++		}
++		sh = 1;
++		for(; sh != 1+20*4; t += 4){
++			a += ((b ^ c) & d) ^ c;
++			a += x[sh & 0xf] + t[0];
++			a = (a << S21) | (a >> (32 - S21));
++			a += b;
++
++			d += ((a ^ b) & c) ^ b;
++			d += x[(sh + 5) & 0xf] + t[1];
++			d = (d << S22) | (d >> (32 - S22));
++			d += a;
++
++			c += ((d ^ a) & b) ^ a;
++			c += x[(sh + 10) & 0xf] + t[2];
++			c = (c << S23) | (c >> (32 - S23));
++			c += d;
++
++			b += ((c ^ d) & a) ^ d;
++			b += x[(sh + 15) & 0xf] + t[3];
++			b = (b << S24) | (b >> (32 - S24));
++			b += c;
++
++			sh += 20;
++		}
++		sh = 5;
++		for(; sh != 5+12*4; t += 4){
++			a += b ^ c ^ d;
++			a += x[sh & 0xf] + t[0];
++			a = (a << S31) | (a >> (32 - S31));
++			a += b;
++
++			d += a ^ b ^ c;
++			d += x[(sh + 3) & 0xf] + t[1];
++			d = (d << S32) | (d >> (32 - S32));
++			d += a;
++
++			c += d ^ a ^ b;
++			c += x[(sh + 6) & 0xf] + t[2];
++			c = (c << S33) | (c >> (32 - S33));
++			c += d;
++
++			b += c ^ d ^ a;
++			b += x[(sh + 9) & 0xf] + t[3];
++			b = (b << S34) | (b >> (32 - S34));
++			b += c;
++
++			sh += 12;
++		}
++		sh = 0;
++		for(; sh != 28*4; t += 4){
++			a += c ^ (b | ~d);
++			a += x[sh & 0xf] + t[0];
++			a = (a << S41) | (a >> (32 - S41));
++			a += b;
++
++			d += b ^ (a | ~c);
++			d += x[(sh + 7) & 0xf] + t[1];
++			d = (d << S42) | (d >> (32 - S42));
++			d += a;
++
++			c += a ^ (d | ~b);
++			c += x[(sh + 14) & 0xf] + t[2];
++			c = (c << S43) | (c >> (32 - S43));
++			c += d;
++
++			b += d ^ (c | ~a);
++			b += x[(sh + 21) & 0xf] + t[3];
++			b = (b << S44) | (b >> (32 - S44));
++			b += c;
++
++			sh += 28;
++		}
++
++		s[0] += a;
++		s[1] += b;
++		s[2] += c;
++		s[3] += d;
++	}
++}
++
++/*
++ *	decodes input (uchar) into output (u32int). Assumes len is
++ *	a multiple of 4.
++ */
++static void
++decode(u32int *output, uchar *input, ulong len)
++{
++	uchar *e;
++
++	for(e = input+len; input < e; input += 4)
++		*output++ = input[0] | (input[1] << 8) |
++			(input[2] << 16) | (input[3] << 24);
++}
+diff -r 9c9f289188ff posix-arm/sha1block.c
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/posix-arm/sha1block.c	Tue Feb 22 18:06:58 2011 +0000
+@@ -0,0 +1,189 @@
++#include <u.h>
++#include <libc.h>
++#include <libsec.h>
++
++void
++_sha1block(uchar *p, ulong len, u32int *s)
++{
++	u32int a, b, c, d, e, x;
++	uchar *end;
++	u32int *wp, *wend;
++	u32int w[80];
++
++	/* at this point, we have a multiple of 64 bytes */
++	for(end = p+len; p < end;){
++		a = s[0];
++		b = s[1];
++		c = s[2];
++		d = s[3];
++		e = s[4];
++
++		wend = w + 15;
++		for(wp = w; wp < wend; wp += 5){
++			wp[0] = (p[0]<<24) | (p[1]<<16) | (p[2]<<8) | p[3];
++			e += ((a<<5) | (a>>27)) + wp[0];
++			e += 0x5a827999 + (((c^d)&b)^d);
++			b = (b<<30)|(b>>2);
++
++			wp[1] = (p[4]<<24) | (p[5]<<16) | (p[6]<<8) | p[7];
++			d += ((e<<5) | (e>>27)) + wp[1];
++			d += 0x5a827999 + (((b^c)&a)^c);
++			a = (a<<30)|(a>>2);
++
++			wp[2] = (p[8]<<24) | (p[9]<<16) | (p[10]<<8) | p[11];
++			c += ((d<<5) | (d>>27)) + wp[2];
++			c += 0x5a827999 + (((a^b)&e)^b);
++			e = (e<<30)|(e>>2);
++
++			wp[3] = (p[12]<<24) | (p[13]<<16) | (p[14]<<8) | p[15];
++			b += ((c<<5) | (c>>27)) + wp[3];
++			b += 0x5a827999 + (((e^a)&d)^a);
++			d = (d<<30)|(d>>2);
++
++			wp[4] = (p[16]<<24) | (p[17]<<16) | (p[18]<<8) | p[19];
++			a += ((b<<5) | (b>>27)) + wp[4];
++			a += 0x5a827999 + (((d^e)&c)^e);
++			c = (c<<30)|(c>>2);
++			
++			p += 20;
++		}
++
++		wp[0] = (p[0]<<24) | (p[1]<<16) | (p[2]<<8) | p[3];
++		e += ((a<<5) | (a>>27)) + wp[0];
++		e += 0x5a827999 + (((c^d)&b)^d);
++		b = (b<<30)|(b>>2);
++
++		x = wp[-2] ^ wp[-7] ^ wp[-13] ^ wp[-15];
++		wp[1] = (x<<1) | (x>>31);
++		d += ((e<<5) | (e>>27)) + wp[1];
++		d += 0x5a827999 + (((b^c)&a)^c);
++		a = (a<<30)|(a>>2);
++
++		x = wp[-1] ^ wp[-6] ^ wp[-12] ^ wp[-14];
++		wp[2] = (x<<1) | (x>>31);
++		c += ((d<<5) | (d>>27)) + wp[2];
++		c += 0x5a827999 + (((a^b)&e)^b);
++		e = (e<<30)|(e>>2);
++
++		x = wp[0] ^ wp[-5] ^ wp[-11] ^ wp[-13];
++		wp[3] = (x<<1) | (x>>31);
++		b += ((c<<5) | (c>>27)) + wp[3];
++		b += 0x5a827999 + (((e^a)&d)^a);
++		d = (d<<30)|(d>>2);
++
++		x = wp[1] ^ wp[-4] ^ wp[-10] ^ wp[-12];
++		wp[4] = (x<<1) | (x>>31);
++		a += ((b<<5) | (b>>27)) + wp[4];
++		a += 0x5a827999 + (((d^e)&c)^e);
++		c = (c<<30)|(c>>2);
++
++		wp += 5;
++		p += 4;
++
++		wend = w + 40;
++		for(; wp < wend; wp += 5){
++			x = wp[-3] ^ wp[-8] ^ wp[-14] ^ wp[-16];
++			wp[0] = (x<<1) | (x>>31);
++			e += ((a<<5) | (a>>27)) + wp[0];
++			e += 0x6ed9eba1 + (b^c^d);
++			b = (b<<30)|(b>>2);
++
++			x = wp[-2] ^ wp[-7] ^ wp[-13] ^ wp[-15];
++			wp[1] = (x<<1) | (x>>31);
++			d += ((e<<5) | (e>>27)) + wp[1];
++			d += 0x6ed9eba1 + (a^b^c);
++			a = (a<<30)|(a>>2);
++
++			x = wp[-1] ^ wp[-6] ^ wp[-12] ^ wp[-14];
++			wp[2] = (x<<1) | (x>>31);
++			c += ((d<<5) | (d>>27)) + wp[2];
++			c += 0x6ed9eba1 + (e^a^b);
++			e = (e<<30)|(e>>2);
++
++			x = wp[0] ^ wp[-5] ^ wp[-11] ^ wp[-13];
++			wp[3] = (x<<1) | (x>>31);
++			b += ((c<<5) | (c>>27)) + wp[3];
++			b += 0x6ed9eba1 + (d^e^a);
++			d = (d<<30)|(d>>2);
++
++			x = wp[1] ^ wp[-4] ^ wp[-10] ^ wp[-12];
++			wp[4] = (x<<1) | (x>>31);
++			a += ((b<<5) | (b>>27)) + wp[4];
++			a += 0x6ed9eba1 + (c^d^e);
++			c = (c<<30)|(c>>2);
++		}
++
++		wend = w + 60;
++		for(; wp < wend; wp += 5){
++			x = wp[-3] ^ wp[-8] ^ wp[-14] ^ wp[-16];
++			wp[0] = (x<<1) | (x>>31);
++			e += ((a<<5) | (a>>27)) + wp[0];
++			e += 0x8f1bbcdc + ((b&c)|((b|c)&d));
++			b = (b<<30)|(b>>2);
++
++			x = wp[-2] ^ wp[-7] ^ wp[-13] ^ wp[-15];
++			wp[1] = (x<<1) | (x>>31);
++			d += ((e<<5) | (e>>27)) + wp[1];
++			d += 0x8f1bbcdc + ((a&b)|((a|b)&c));
++			a = (a<<30)|(a>>2);
++
++			x = wp[-1] ^ wp[-6] ^ wp[-12] ^ wp[-14];
++			wp[2] = (x<<1) | (x>>31);
++			c += ((d<<5) | (d>>27)) + wp[2];
++			c += 0x8f1bbcdc + ((e&a)|((e|a)&b));
++			e = (e<<30)|(e>>2);
++
++			x = wp[0] ^ wp[-5] ^ wp[-11] ^ wp[-13];
++			wp[3] = (x<<1) | (x>>31);
++			b += ((c<<5) | (c>>27)) + wp[3];
++			b += 0x8f1bbcdc + ((d&e)|((d|e)&a));
++			d = (d<<30)|(d>>2);
++
++			x = wp[1] ^ wp[-4] ^ wp[-10] ^ wp[-12];
++			wp[4] = (x<<1) | (x>>31);
++			a += ((b<<5) | (b>>27)) + wp[4];
++			a += 0x8f1bbcdc + ((c&d)|((c|d)&e));
++			c = (c<<30)|(c>>2);
++		}
++
++		wend = w + 80;
++		for(; wp < wend; wp += 5){
++			x = wp[-3] ^ wp[-8] ^ wp[-14] ^ wp[-16];
++			wp[0] = (x<<1) | (x>>31);
++			e += ((a<<5) | (a>>27)) + wp[0];
++			e += 0xca62c1d6 + (b^c^d);
++			b = (b<<30)|(b>>2);
++
++			x = wp[-2] ^ wp[-7] ^ wp[-13] ^ wp[-15];
++			wp[1] = (x<<1) | (x>>31);
++			d += ((e<<5) | (e>>27)) + wp[1];
++			d += 0xca62c1d6 + (a^b^c);
++			a = (a<<30)|(a>>2);
++
++			x = wp[-1] ^ wp[-6] ^ wp[-12] ^ wp[-14];
++			wp[2] = (x<<1) | (x>>31);
++			c += ((d<<5) | (d>>27)) + wp[2];
++			c += 0xca62c1d6 + (e^a^b);
++			e = (e<<30)|(e>>2);
++
++			x = wp[0] ^ wp[-5] ^ wp[-11] ^ wp[-13];
++			wp[3] = (x<<1) | (x>>31);
++			b += ((c<<5) | (c>>27)) + wp[3];
++			b += 0xca62c1d6 + (d^e^a);
++			d = (d<<30)|(d>>2);
++
++			x = wp[1] ^ wp[-4] ^ wp[-10] ^ wp[-12];
++			wp[4] = (x<<1) | (x>>31);
++			a += ((b<<5) | (b>>27)) + wp[4];
++			a += 0xca62c1d6 + (c^d^e);
++			c = (c<<30)|(c>>2);
++		}
++
++		/* save state */
++		s[0] += a;
++		s[1] += b;
++		s[2] += c;
++		s[3] += d;
++		s[4] += e;
++	}
++}
+diff -r 9c9f289188ff posix-arm/tas.c
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/posix-arm/tas.c	Tue Feb 22 18:06:58 2011 +0000
+@@ -0,0 +1,24 @@
++#include "u.h"
++#include "libc.h"
++
++int
++tas(long *x)
++{
++	int     v;
++
++	__asm__(
++		"swp  %0, %1, [%2]"
++		: "=&r" (v)
++		: "r" (1), "r" (x)
++		: "memory"
++	);
++	switch(v) {
++	case 0:
++	case 1:
++		return v;
++	default:
++		print("canlock: corrupted 0x%lux\n", v);
++		return 1;
++	}
++}
++
